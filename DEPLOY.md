@@ -1,21 +1,74 @@
 # 部署指南
 
-## S3 静态托管部署
+本指南将帮助你将前端应用部署到 AWS S3（可选 CloudFront）。
+
+## 🚀 快速开始
+
+### 使用部署脚本（推荐）
+
+```bash
+# 1. 给脚本添加执行权限
+chmod +x deploy.sh
+
+# 2. 运行部署脚本
+./deploy.sh <bucket-name> <api-gateway-url> [cloudfront-distribution-id]
+
+# 示例
+./deploy.sh my-claim-upload-bucket https://abc123.execute-api.us-east-1.amazonaws.com/prod
+```
+
+部署脚本会自动：
+- ✅ 检查环境和依赖
+- ✅ 构建项目（注入 API URL）
+- ✅ 上传到 S3
+- ✅ 清除 CloudFront 缓存（如果提供）
+
+### 手动部署
+
+如果你想手动控制每个步骤，请继续阅读下面的详细说明。
+
+---
+
+## 📋 详细部署步骤
 
 ### 1. 构建项目
 
+**重要**: 构建时必须设置后端 API 的 URL！
+
 ```bash
-npm run build
+# 设置 API URL 并构建
+VITE_API_BASE_URL=https://your-api-gateway-url.com npm run build
 ```
 
 构建产物在 `dist/` 目录。
 
 ### 2. 配置 S3 Bucket
 
-1. 创建 S3 bucket（或使用现有 bucket）
-2. 启用静态网站托管
-3. 设置索引文档为 `index.html`
-4. 配置错误文档（可选）：`index.html`（用于 SPA 路由）
+#### 2.1 创建 S3 Bucket（如果还没有）
+
+```bash
+aws s3 mb s3://your-bucket-name --region us-east-1
+```
+
+#### 2.2 启用静态网站托管
+
+在 AWS Console 中：
+1. 进入 S3 bucket
+2. 点击 "Properties" 标签
+3. 滚动到 "Static website hosting"
+4. 点击 "Edit"
+5. 启用静态网站托管
+6. 设置索引文档为 `index.html`
+7. 设置错误文档为 `index.html`（用于 SPA 路由支持）
+8. 保存
+
+或者使用 AWS CLI：
+
+```bash
+aws s3 website s3://your-bucket-name/ \
+  --index-document index.html \
+  --error-document index.html
+```
 
 ### 3. 配置路由重写（如果部署在子路径）
 
@@ -36,12 +89,44 @@ npm run build
 
 ### 4. CORS 配置
 
-如果前端需要从不同域名调用 API，确保后端 API 配置了正确的 CORS 头：
+#### 4.1 API Gateway CORS 配置
+
+后端 API Gateway 需要配置 CORS 头，允许前端域名访问：
 
 ```
-Access-Control-Allow-Origin: *
+Access-Control-Allow-Origin: https://your-frontend-domain.com
 Access-Control-Allow-Methods: GET, POST, PUT
 Access-Control-Allow-Headers: Content-Type
+Access-Control-Allow-Credentials: false
+```
+
+**注意**: 如果前端和后端在同一域名下，可能不需要 CORS。
+
+#### 4.2 S3 Bucket CORS 配置（用于文件上传）
+
+如果文件直接上传到 S3，需要配置 bucket CORS。创建 `cors-config.json`:
+
+```json
+[
+  {
+    "AllowedHeaders": ["*"],
+    "AllowedMethods": ["PUT", "POST"],
+    "AllowedOrigins": [
+      "https://your-cloudfront-domain.com",
+      "https://your-bucket-name.s3-website-us-east-1.amazonaws.com"
+    ],
+    "ExposeHeaders": ["ETag"],
+    "MaxAgeSeconds": 3000
+  }
+]
+```
+
+应用配置：
+
+```bash
+aws s3api put-bucket-cors \
+  --bucket your-bucket-name \
+  --cors-configuration file://cors-config.json
 ```
 
 ### 5. 环境变量配置
@@ -80,7 +165,9 @@ aws s3 sync dist/ s3://your-bucket-name/claim-upload/ --delete
 
 ### 7. 设置权限
 
-确保 S3 bucket 有正确的读取权限：
+#### 方式 1: 公开访问（仅用于测试）
+
+如果 bucket 需要公开访问，创建 `bucket-policy.json`:
 
 ```json
 {
@@ -90,6 +177,35 @@ aws s3 sync dist/ s3://your-bucket-name/claim-upload/ --delete
       "Sid": "PublicReadGetObject",
       "Effect": "Allow",
       "Principal": "*",
+      "Action": "s3:GetObject",
+      "Resource": "arn:aws:s3:::your-bucket-name/*"
+    }
+  ]
+}
+```
+
+应用策略：
+
+```bash
+aws s3api put-bucket-policy \
+  --bucket your-bucket-name \
+  --policy file://bucket-policy.json
+```
+
+#### 方式 2: 通过 CloudFront 访问（推荐生产环境）
+
+如果使用 CloudFront，bucket 可以保持私有，只允许 CloudFront 访问：
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "AllowCloudFrontAccess",
+      "Effect": "Allow",
+      "Principal": {
+        "AWS": "arn:aws:iam::cloudfront:user/CloudFront Origin Access Identity YOUR_OAI_ID"
+      },
       "Action": "s3:GetObject",
       "Resource": "arn:aws:s3:::your-bucket-name/*"
     }
@@ -108,16 +224,37 @@ aws s3 sync dist/ s3://your-bucket-name/claim-upload/ --delete
 
 ## 更新部署
 
-更新时只需重新构建并同步到 S3：
+### 使用部署脚本（推荐）
 
 ```bash
-npm run build
-aws s3 sync dist/ s3://your-bucket-name/claim-upload/ --delete
+./deploy.sh <bucket-name> <api-gateway-url> [cloudfront-distribution-id]
 ```
 
-清除 CloudFront 缓存（如果使用）：
+### 手动更新
 
 ```bash
+# 1. 重新构建（使用相同的 API URL）
+VITE_API_BASE_URL=https://your-api-gateway-url.com npm run build
+
+# 2. 同步到 S3
+aws s3 sync dist/ s3://your-bucket-name/claim-upload/ --delete
+
+# 3. 清除 CloudFront 缓存（如果使用）
 aws cloudfront create-invalidation --distribution-id YOUR_DIST_ID --paths "/*"
 ```
+
+## 📝 部署检查清单
+
+详细的部署前检查清单请参考 [DEPLOYMENT_CHECKLIST.md](./DEPLOYMENT_CHECKLIST.md)
+
+## 🔍 验证部署
+
+部署完成后，请验证：
+
+1. **访问测试**: 在浏览器中打开部署的 URL
+2. **功能测试**: 尝试上传一个小文件
+3. **错误处理**: 检查网络错误提示是否正常
+4. **API 连接**: 确认能成功调用后端 API
+
+如果遇到问题，请参考检查清单中的"常见问题"部分。
 

@@ -1,5 +1,6 @@
 import { UploadForm } from '../components/UploadForm';
 import { UploadQueue } from '../components/UploadQueue';
+import { ApiConfigInfo } from '../components/ApiConfigInfo';
 
 export function ClaimUploadPage() {
   return (
@@ -13,6 +14,7 @@ export function ClaimUploadPage() {
       </header>
 
       <main className="page-content">
+        <ApiConfigInfo />
         <div className="upload-section">
           <UploadForm />
         </div>

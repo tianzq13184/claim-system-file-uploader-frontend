@@ -5,7 +5,7 @@ import type {
   FileType,
   TransactionType,
 } from '../types';
-import { requestPresignUrl, uploadToS3, getUploadStatus } from './api';
+import { requestPresignUrl, uploadToS3, getUploadStatus, NetworkError } from './api';
 import { MAX_CONCURRENT_UPLOADS } from '../types';
 
 type StatusUpdateCallback = (task: UploadTask) => void;
@@ -202,12 +202,29 @@ class UploadManager {
       this.startPolling(presignResponse.file_id, taskId);
     } catch (error) {
       console.error('[UploadManager] Upload task failed:', error);
-      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      
+      let errorMessage: string;
       let failureReason: FailureReason = 'UPLOAD_ERROR';
 
       const currentTask = this.tasks.get(taskId);
       if (currentTask?.status === 'REQUESTING_URL') {
         failureReason = 'REQUESTING_URL_FAILED';
+      }
+
+      // Handle NetworkError with user-friendly messages
+      if (error instanceof NetworkError) {
+        errorMessage = error.message;
+        
+        // Provide additional context based on error type
+        if (error.type === 'CORS_ERROR') {
+          errorMessage += ' This is usually a backend configuration issue.';
+        } else if (error.type === 'CONNECTION_ERROR') {
+          errorMessage += ' Please verify the API endpoint is correct and accessible.';
+        }
+      } else if (error instanceof Error) {
+        errorMessage = error.message;
+      } else {
+        errorMessage = 'Unknown error occurred during upload';
       }
 
       this.updateTask(taskId, {
@@ -319,7 +336,19 @@ class UploadManager {
         }
       } catch (error) {
         console.error('[UploadManager] Polling error:', error);
-        const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+        
+        let errorMessage: string;
+        if (error instanceof NetworkError) {
+          errorMessage = error.message;
+          if (error.type === 'CORS_ERROR' || error.type === 'CONNECTION_ERROR') {
+            errorMessage += ' Please check your network connection and API configuration.';
+          }
+        } else if (error instanceof Error) {
+          errorMessage = error.message;
+        } else {
+          errorMessage = 'Unknown error occurred while checking upload status';
+        }
+        
         this.updateTask(taskId, {
           status: 'FAILED',
           failureReason: 'BACKEND_FAILED',

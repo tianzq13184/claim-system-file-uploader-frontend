@@ -107,3 +107,5 @@ export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localho
 // Max concurrent uploads
 export const MAX_CONCURRENT_UPLOADS = 3;
 
+
+
